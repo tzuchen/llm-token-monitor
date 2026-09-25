@@ -1,0 +1,18 @@
+[Unit]
+Description=Spark LLM Token Monitor Service
+After=network-online.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/orin/llm-token-monitor
+ExecStart=/usr/bin/python3 -m uvicorn main:app --host 0.0.0.0 --port 8095
+Restart=always
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+Environment=PORT=8095
+Environment=HOST=0.0.0.0
+Environment=SGLANG_METRICS_URL=http://localhost:8000/metrics
+Environment=METRICS_DB_PATH=/home/orin/llm-token-monitor/data/token_metrics.db
+
+[Install]
+WantedBy=default.target
