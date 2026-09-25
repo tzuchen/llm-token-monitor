@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Jetson LLM Token Monitor Dashboard</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    :root {
+      --bg-color: #0d1117;
+      --card-bg: #161b22;
+      --border-color: #30363d;
+      --text-main: #c9d1d9;
+      --text-muted: #8b949e;
+      --accent: #58a6ff;
+      --success: #3fb950;
+      --warning: #d29922;
+      --danger: #f85149;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background-color: var(--bg-color);
+      color: var(--text-main);
+      padding: 24px;
+    }
+    .header {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 24px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid var(--border-color);
+    }
+    .title h1 { font-size: 1.5rem; color: #fff; margin-bottom: 4px; }
+    .title p { font-size: 0.9rem; color: var(--text-muted); }
+    .controls {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+    input[type="text"] {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      color: #fff;
+      padding: 6px 12px;
+      border-radius: 6px;
+      font-size: 0.9rem;
+      width: 260px;
+    }
+    button {
+      background: #238636;
+      color: #fff;
+      border: none;
+      padding: 6px 14px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-weight: 500;
+    }
+    button:hover { background: #2ea043; }
+    .status-badge {
+      display: inline-block;
+      padding: 2px 8px;
+      border-radius: 12px;
+      font-size: 0.75rem;
+      font-weight: bold;
+      text-transform: uppercase;
+      margin-left: 8px;
+    }
+    .status-online { background: #23863633; color: var(--success); border: 1px solid var(--success); }
+    .status-offline { background: #da363333; color: var(--danger); border: 1px solid var(--danger); }
+
+    .grid-cards {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 16px;
+      margin-bottom: 24px;
+    }
+    .card {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 16px;
+    }
+    .card-label {
+      font-size: 0.85rem;
+      color: var(--text-muted);
+      margin-bottom: 8px;
+    }
+    .card-value {
+      font-size: 1.8rem;
+      font-weight: 700;
+      color: #fff;
+    }
+    .card-sub {
+      font-size: 0.8rem;
+      color: var(--text-muted);
+      margin-top: 4px;
+    }
+
+    .grid-charts {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(450px, 1fr));
+      gap: 20px;
+    }
+    .chart-container {
+      background: var(--card-bg);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 16px;
+      position: relative;
+      height: 340px;
+    }
+    .chart-title {
+      font-size: 1rem;
+      font-weight: 600;
+      color: #fff;
+      margin-bottom: 12px;
+    }
+  </style>
+</head>
+<body>
+
+  <div class="header">
+    <div class="title">
+      <h1>Jetson LLM Monitor <span id="statusBadge" class="status-badge status-offline">Connecting</span></h1>
+      <p>Spark SGLang 推論即時吞吐量與累積 Token 監控面板</p>
+    </div>
+    <div class="controls">
+      <input type="text" id="hostInput" value="http://192.168.31.128:8095" placeholder="Spark Monitor API Host">
+      <button onclick="saveAndRefresh()">連線 / 更新</button>
+    </div>
+  </div>
+
+  <div class="grid-cards">
+    <div class="card">
+      <div class="card-label">目前生成速率 (TPS)</div>
+      <div class="card-value" id="valGenTps">0.0</div>
+      <div class="card-sub" id="valPrefillTps">Prefill: 0.0 tok/s</div>
+    </div>
+    <div class="card">
+      <div class="card-label">KV Cache 佔用率</div>
+      <div class="card-value" id="valKvPct">0.0%</div>
+      <div class="card-sub" id="valKvTokens">0 / 0 tokens</div>
+    </div>
+    <div class="card">
+      <div class="card-label">今日累積 Token</div>
+      <div class="card-value" id="valTodayTotal">0</div>
+      <div class="card-sub" id="valTodayPromptGen">In: 0 | Out: 0</div>
+    </div>
+    <div class="card">
+      <div class="card-label">活躍 / 總請求數</div>
+      <div class="card-value" id="valActiveReqs">0</div>
+      <div class="card-sub" id="valTotalReqs">總請求: 0 次</div>
+    </div>
+  </div>
+
+  <div class="grid-charts">
+    <div class="chart-container">
+      <div class="chart-title">最近 24 小時每小時 Token 用量 (Hourly)</div>
+      <canvas id="hourlyChart"></canvas>
+    </div>
+    <div class="chart-container">
+      <div class="chart-title">近 14 日每日用量與日平均 (Daily)</div>
+      <canvas id="dailyChart"></canvas>
+    </div>
+  </div>
+
+  <script>
+    let hourlyChartInstance = null;
+    let dailyChartInstance = null;
+
+    function getHost() {
+      return document.getElementById("hostInput").value.trim().replace(/\/$/, "");
+    }
+
+    function initCharts() {
+      const ctxHourly = document.getElementById("hourlyChart").getContext("2d");
+      hourlyChartInstance = new Chart(ctxHourly, {
+        type: "bar",
+        data: {
+          labels: [],
+          datasets: [
+            { label: "Generation (Output)", data: [], backgroundColor: "#58a6ff" },
+            { label: "Prompt (Input)", data: [], backgroundColor: "#1f6feb" }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: { stacked: true, grid: { color: "#30363d" }, ticks: { color: "#8b949e" } },
+            y: { stacked: true, grid: { color: "#30363d" }, ticks: { color: "#8b949e" } }
+          },
+          plugins: { legend: { labels: { color: "#c9d1d9" } } }
+        }
+      });
+
+      const ctxDaily = document.getElementById("dailyChart").getContext("2d");
+      dailyChartInstance = new Chart(ctxDaily, {
+        type: "line",
+        data: {
+          labels: [],
+          datasets: [
+            {
+              label: "每日總 Token",
+              data: [],
+              borderColor: "#3fb950",
+              backgroundColor: "#23863633",
+              fill: true,
+              tension: 0.3
+            }
+          ]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          scales: {
+            x: { grid: { color: "#30363d" }, ticks: { color: "#8b949e" } },
+            y: { grid: { color: "#30363d" }, ticks: { color: "#8b949e" } }
+          },
+          plugins: { legend: { labels: { color: "#c9d1d9" } } }
+        }
+      });
+    }
+
+    async function fetchData() {
+      const host = getHost();
+      try {
+        const res = await fetch(`${host}/api/llm/stats?hours=24&days=14`, { mode: "cors" });
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+        const data = await res.json();
+
+        // Update badge
+        const badge = document.getElementById("statusBadge");
+        badge.className = "status-badge status-online";
+        badge.innerText = data.realtime.status || "ONLINE";
+
+        // Update cards
+        const rt = data.realtime;
+        document.getElementById("valGenTps").innerText = `${rt.tps.generation_tps} tok/s`;
+        document.getElementById("valPrefillTps").innerText = `Prefill: ${rt.tps.prefill_tps} tok/s`;
+
+        document.getElementById("valKvPct").innerText = `${rt.kv_cache.usage_percent}%`;
+        document.getElementById("valKvTokens").innerText = `${rt.kv_cache.used_tokens.toLocaleString()} / ${rt.kv_cache.max_tokens.toLocaleString()} tokens`;
+
+        const today = rt.today_summary;
+        document.getElementById("valTodayTotal").innerText = today.total_tokens.toLocaleString();
+        document.getElementById("valTodayPromptGen").innerText = `In: ${today.prompt_tokens.toLocaleString()} | Out: ${today.generation_tokens.toLocaleString()}`;
+
+        document.getElementById("valActiveReqs").innerText = rt.concurrency.active_requests;
+        document.getElementById("valTotalReqs").innerText = `總請求: ${rt.concurrency.total_requests.toLocaleString()} 次`;
+
+        // Update hourly chart
+        const hourly = data.hourly.history || [];
+        hourlyChartInstance.data.labels = hourly.map(h => h.time.split(" ")[1].slice(0, 5));
+        hourlyChartInstance.data.datasets[0].data = hourly.map(h => h.generation);
+        hourlyChartInstance.data.datasets[1].data = hourly.map(h => h.prompt);
+        hourlyChartInstance.update();
+
+        // Update daily chart
+        const daily = data.daily.history || [];
+        dailyChartInstance.data.labels = daily.map(d => d.date.slice(5));
+        dailyChartInstance.data.datasets[0].data = daily.map(d => d.total);
+        dailyChartInstance.update();
+
+      } catch (err) {
+        console.error("Fetch failed:", err);
+        const badge = document.getElementById("statusBadge");
+        badge.className = "status-badge status-offline";
+        badge.innerText = "OFFLINE";
+      }
+    }
+
+    function saveAndRefresh() {
+      fetchData();
+    }
+
+    window.onload = () => {
+      initCharts();
+      fetchData();
+      setInterval(fetchData, 3000);
+    };
+  </script>
+</body>
+</html>
